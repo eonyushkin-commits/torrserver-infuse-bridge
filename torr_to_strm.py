@@ -10,8 +10,9 @@ import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
-
-# Настройки (из переменных окружения)
+#------------------------------------------------------------------------------
+# Конфигурация: параметры запуска, читаемые из переменных окружения.
+#------------------------------------------------------------------------------
 TORR_PORT = os.getenv("TORR_PORT", "8090")
 TORR_INTERNAL_PORT = os.getenv("TORR_INTERNAL_PORT", "8090")
 TORRSERVER_INTERNAL = f"http://torrserver:{TORR_INTERNAL_PORT}"
@@ -31,8 +32,9 @@ WAKEUP_DELAY = 10
 MAX_RETRIES = 3
 INTERVAL = 300
 
-
-# HTTP-сессия с ретраями
+#------------------------------------------------------------------------------
+# HTTP-клиент: общая сессия с ретраями для временных ошибок сети.
+#------------------------------------------------------------------------------
 session = requests.Session()
 
 retry_config = Retry(
@@ -41,16 +43,16 @@ retry_config = Retry(
     status_forcelist=(500, 502, 503, 504),
     allowed_methods=("HEAD", "GET", "POST"),
 )
+
 adapter = HTTPAdapter(max_retries=retry_config)
 session.mount("http://", adapter)
 session.mount("https://", adapter)
-
 
 logger = logging.getLogger(__name__)
 
 
 def clean_title(filename: str) -> str:
-    """Убирает расширение, мусорные теги и возвращает упорядоченный тайтл."""
+    """Нормализует имя медиафайла и возвращает стабильный заголовок."""
     name = os.path.splitext(filename)[0]
     name = name.replace(".", " ").replace("_", " ")
 
@@ -83,7 +85,7 @@ def clean_title(filename: str) -> str:
 
 
 def get_torrents():
-    """Возвращает список торрентов torrserver или None при ошибке."""
+    """Запрашивает список торрентов из TorrServer или возвращает None при ошибке."""
     try:
         response = session.post(
             f"{TORRSERVER_INTERNAL}/torrents",
@@ -98,6 +100,7 @@ def get_torrents():
 
 
 def main() -> None:
+    """Синхронизирует .strm-файлы с активными торрентами TorrServer."""
     if not HOST_IP or HOST_IP == "127.0.0.1":
         logger.warning(
             "HOST_IP не задан или указан localhost — Infuse не сможет воспроизвести видео!",
@@ -126,8 +129,7 @@ def main() -> None:
         else:
             t_title = torrent.get("title", "Неизвестное_название")
             logger.warning(
-                "Пропущен торрент без хэша (ожидает инициализации или ошибка). "
-                "Название: %s",
+                "Пропущен торрент без хэша (ожидает инициализации или ошибка). Название: %s",
                 t_title,
             )
 
@@ -137,7 +139,7 @@ def main() -> None:
     pending_hashes = list(active_hashes_set)
     ready_files = {}
 
-    # Ждём появления file_stats по активным торрентам
+    # Ожидаем метаданные файлов, пока торрент не станет готов или не закончатся попытки.
     for attempt in range(MAX_RETRIES):
         still_pending = []
 
@@ -193,7 +195,7 @@ def main() -> None:
             [h[:8] for h in pending_hashes],
         )
 
-    # Генерация/обновление .strm
+    # Создаём или обновляем .strm-файлы для найденных видеофайлов.
     for t_hash, files in ready_files.items():
         for idx, file_info in enumerate(files):
             file_path = file_info.get("path", "")
@@ -238,7 +240,7 @@ def main() -> None:
                     pass
                 logger.error("Ошибка записи файла %s: %s", strm_filepath, exc)
 
-    # Чистка устаревших .strm без живых торрентов
+    # Удаляем устаревшие .strm-файлы, которые больше не связаны с активными торрентами.
     for file in os.listdir(OUTPUT_DIR):
         if not file.endswith(".strm"):
             continue
@@ -257,7 +259,7 @@ def main() -> None:
 
 
 def configure_logging(level: int = logging.INFO) -> None:
-    """Базовая конфигурация логгера: выводим в stdout с понятным форматом."""
+    """Настраивает корневой логгер для вывода в stdout внутри контейнера."""
     handler = logging.StreamHandler()
     formatter = logging.Formatter(
         fmt="%(asctime)s [UTC] [%(levelname)s] %(message)s",
@@ -283,6 +285,7 @@ if __name__ == "__main__":
     shutdown_event = threading.Event()
 
     def handle_sigterm(signum, frame) -> None:
+        """Обрабатывает сигналы завершения и останавливает цикл опроса."""
         logger.info("Получен сигнал завершения. Остановка парсера...")
         shutdown_event.set()
 
