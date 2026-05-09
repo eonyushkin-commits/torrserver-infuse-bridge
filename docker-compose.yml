@@ -39,7 +39,7 @@ services:
         condition: service_healthy
 
   parser:
-    build: .
+    image: ghcr.io/eonyushkin-commits/torrserver-infuse-bridge:latest
     container_name: strm-parser
     restart: unless-stopped
     depends_on:
