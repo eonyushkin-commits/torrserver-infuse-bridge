@@ -1,4 +1,4 @@
-[English](README.en.md) | [Русский](README.md)
+[Русский](README.md) | [English](README.en.md)
 
 # 🎬 TorrServer to Infuse Bridge
 
