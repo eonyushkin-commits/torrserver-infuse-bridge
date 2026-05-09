@@ -1,4 +1,4 @@
-[Русский](README.md) | [English](README.en.md)
+[Russian](README.md) | [English](README.en.md)
 
 # 🎬 TorrServer to Infuse Bridge
 
@@ -27,6 +27,7 @@ How it works:
 - Installation and updates through a single `install.sh` (no manual Git and Compose work).
 - Automatic `.strm` file generation for Infuse with atomic writes (no risk of empty files during Infuse reads).
 - Background TorrServer polling without cron or Python dependencies on the host.
+- The `parser` service image is published to [GitHub Container Registry (GHCR)](https://ghcr.io/eonyushkin-commits/torrserver-infuse-bridge) and pulled automatically — no build step required on the server.
 - Public library via WebDAV with HTTP Basic Auth.
 - Configuration and data storage inside the project directory (`.env`, TorrServer database, `.strm` library).
 - Safe code updates without data loss in `./ts` and `./strm_library`.
@@ -49,7 +50,7 @@ Run on your server:
 ```bash
 curl -O https://raw.githubusercontent.com/eonyushkin-commits/torrserver-infuse-bridge/refs/heads/main/install.sh
 chmod +x install.sh
-./install.sh
+sudo ./install.sh
 ```
 
 The installation script:
@@ -58,7 +59,7 @@ The installation script:
 - prompts for WebDAV and TorrServer parameters;
 - creates `.env` with specified values;
 - generates `.htpasswd` and `nginx.conf` config for TorrServer proxy;
-- starts containers via Docker Compose.
+- pulls the ready-built `parser` image from GHCR and starts all containers via Docker Compose.
 
 ## 🔄 Updates
 
@@ -66,7 +67,7 @@ Re-running `install.sh` is the standard way to update the project and change par
 
 ```bash
 cd /opt/torrserver-infuse-bridge
-./install.sh
+sudo ./install.sh
 ```
 
 If the `/opt/torrserver-infuse-bridge` directory is a git repository, the script:
@@ -75,7 +76,15 @@ If the `/opt/torrserver-infuse-bridge` directory is a git repository, the script
 - determines the current branch (`git rev-parse --abbrev-ref HEAD`);
 - executes `git fetch --all && git reset --hard "origin/$CURRENT_BRANCH"` to update code;
 - recreates `.env` and configs if necessary;
-- brings up containers with current configuration, **without touching directories** `./ts` and `./strm_library`.
+- pulls the latest `parser` image from GHCR and brings up containers, **without touching directories** `./ts` and `./strm_library`.
+
+To manually update only the `parser` image without a full reinstall:
+
+```bash
+cd /opt/torrserver-infuse-bridge
+docker compose pull parser
+docker compose up -d parser
+```
 
 ## 🧩 Installation Parameters
 
@@ -105,10 +114,11 @@ Main working directories and files:
 - `.env` — environment parameters (WebDAV/TorrServer port, login/password, external IP/domain);
 - `.htpasswd` — file with bcrypt password hash for HTTP Basic Auth (generated automatically, not stored in Git);
 - `nginx.conf` — Nginx proxy configuration for TorrServer (generated automatically);
-- `./torr_to_strm.py` — parser script that polls TorrServer and creates `.strm` files;
 - `./strm_library` — library of `.strm` files for Infuse;
 - `./ts` — TorrServer data (configuration, database, cache);
 - `docker-compose.yml` — project containers description.
+
+> `torr_to_strm.py` is part of the repository and is packaged into the `parser` Docker image published on GHCR. On the server it is present as part of the repository clone, but runs exclusively inside the container.
 
 ## 🍏 Connecting in Infuse
 
@@ -176,5 +186,5 @@ Both services are protected by HTTP Basic Auth with login/password set during in
 - The project is oriented toward fully containerized launch without manual Python environment installation on the host.
 - The library for Infuse is published from the local `./strm_library` directory, TorrServer data from `./ts`.
 - Correct media library display in Infuse depends on how parser forms `.strm` files and element names; file names are formatted for Infuse convenience.
-- Parser uses error-resistant polling logic and atomic `.strm` writes via temporary files, so Infuse doesn't encounter empty or partially written files.
+- Parser uses error-resistant polling logic and atomic `.strm` writes via temporary files, so Infuse doesn’t encounter empty or partially written files.
 - The project is especially convenient for VPS scenarios where TorrServer, `.strm` generator, Nginx proxy, and WebDAV work as a unified stack.
