@@ -27,6 +27,7 @@
 - Установка и обновление через один `install.sh` (без ручной работы с Git и Compose).
 - Автоматическая генерация `.strm`-файлов для Infuse с атомарной записью (без риска пустых файлов при чтении Infuse).
 - Фоновый опрос TorrServer без cron и Python-зависимостей на хосте.
+- Образ сервиса `parser` публикуется в [GitHub Container Registry (GHCR)](https://ghcr.io/eonyushkin-commits/torrserver-infuse-bridge) и скачивается автоматически — сборка на сервере не требуется.
 - Публичная библиотека через WebDAV с HTTP Basic Auth.
 - Хранение конфигурации и данных внутри каталога проекта (`.env`, база TorrServer, библиотека `.strm`).
 - Возможность безопасного обновления кода без потери данных в `./ts` и `./strm_library`.
@@ -49,7 +50,7 @@
 ```bash
 curl -O https://raw.githubusercontent.com/eonyushkin-commits/torrserver-infuse-bridge/refs/heads/main/install.sh
 chmod +x install.sh
-./install.sh
+sudo ./install.sh
 ```
 
 Скрипт установки:
@@ -58,24 +59,32 @@ chmod +x install.sh
 - запрашивает параметры WebDAV и TorrServer;
 - создаёт `.env` с указанными значениями;
 - генерирует `.htpasswd` и конфиг `nginx.conf` для прокси перед TorrServer;
-- запускает контейнеры через Docker Compose.
+- скачивает готовый образ `parser` из GHCR и запускает контейнеры через Docker Compose.
 
 ## 🔄 Обновление
 
 Повторный запуск `install.sh` является штатным способом обновления проекта и изменения параметров:
 
 ```bash
-cd /opt/
-./install.sh
+cd /opt/torrserver-infuse-bridge
+sudo ./install.sh
 ```
 
-Если каталог `/opt/` является git‑репозиторием, скрипт:
+Если каталог `/opt/torrserver-infuse-bridge` является git‑репозиторием, скрипт:
 
 - остановит текущие контейнеры;
 - определит текущую ветку (`git rev-parse --abbrev-ref HEAD`);
 - выполнит `git fetch --all && git reset --hard "origin/$ТЕКУЩАЯ_ВЕТКА"` для обновления кода;
 - при необходимости пересоздаст `.env` и конфиги;
-- поднимет контейнеры с актуальной конфигурацией, **не трогая каталоги** `./ts` и `./strm_library`.
+- скачает актуальный образ `parser` из GHCR и поднимет контейнеры, **не трогая каталоги** `./ts` и `./strm_library`.
+
+Чтобы вручную обновить только образ `parser` без переустановки:
+
+```bash
+cd /opt/torrserver-infuse-bridge
+docker compose pull parser
+docker compose up -d parser
+```
 
 ## 🧩 Параметры установки
 
@@ -105,10 +114,11 @@ cd /opt/
 - `.env` — параметры окружения (порт WebDAV/TorrServer, логин/пароль, внешний IP/домен);
 - `.htpasswd` — файл с bcrypt‑хэшем пароля для HTTP Basic Auth (генерируется автоматически, не хранится в Git);
 - `nginx.conf` — конфигурация Nginx‑прокси перед TorrServer (генерируется автоматически);
-- `./torr_to_strm.py` — скрипт парсера, который опрашивает TorrServer и создаёт `.strm`‑файлы;
 - `./strm_library` — библиотека `.strm`-файлов для Infuse;
 - `./ts` — данные TorrServer (конфигурация, база, кэш);
 - `docker-compose.yml` — описание контейнеров проекта.
+
+> `torr_to_strm.py` является частью репозитория и упакован в Docker-образ `parser`, опубликованный в GHCR. На сервере этот файл присутствует как часть клона репозитория, но запускается исключительно внутри контейнера.
 
 ## 🍏 Подключение в Infuse
 
