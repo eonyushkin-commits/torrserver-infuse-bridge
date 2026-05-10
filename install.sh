@@ -15,6 +15,10 @@ readonly NC='\033[0m'
 readonly INSTALL_DIR="/opt/torrserver-infuse-bridge"
 readonly REPO_URL="https://github.com/eonyushkin-commits/torrserver-infuse-bridge.git"
 
+# Захватываем абсолютный путь к скрипту до любых cd,
+# чтобы realpath работал относительно исходной директории, а не INSTALL_DIR.
+readonly SCRIPT_PATH="$(realpath "$0")"
+
 #------------------------------------------------------------------------------
 # Логирование: единый вывод сообщений по уровням важности.
 #------------------------------------------------------------------------------
@@ -259,12 +263,9 @@ start_services() {
 # Не удаляет, если запущен из INSTALL_DIR (штатный путь для обновлений).
 #------------------------------------------------------------------------------
 self_remove() {
-  local script_path
-  script_path="$(realpath "$0")"
-
-  if [[ "$script_path" != "$INSTALL_DIR/install.sh" ]]; then
-    rm -f "$script_path"
-    log_info "Файл установщика удалён: $script_path"
+  if [[ "$SCRIPT_PATH" != "$INSTALL_DIR/install.sh" ]]; then
+    rm -f "$SCRIPT_PATH"
+    log_info "Файл установщика удалён: $SCRIPT_PATH"
   fi
 }
 
