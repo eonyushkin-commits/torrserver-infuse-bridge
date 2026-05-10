@@ -117,7 +117,8 @@ Main working directories and files:
 - `./strm_library` — library of `.strm` files for Infuse;
 - `./ts` — TorrServer data (configuration, database, cache);
 - `docker-compose.yml` — project containers description.
-- `torr_to_strm.py` is part of the repository and is packaged into the `parser` Docker image published on GHCR. On the server it is present as part of the repository clone, but runs exclusively inside the container.
+
+> `torr_to_strm.py` is part of the repository and is packaged into the `parser` Docker image published on GHCR. On the server it is present as part of the repository clone, but runs exclusively inside the container.
 
 ## 🍏 Connecting in Infuse
 
