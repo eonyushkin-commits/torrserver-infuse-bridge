@@ -169,6 +169,11 @@ EOF
     exit 1
   fi
 
+  if ss -tlun | grep -q ":${WEBDAV_PORT} "; then
+    log_err "Порт $WEBDAV_PORT уже занят. Запустите установку заново или укажите другой порт."
+    exit 1
+  fi
+
   read -rp "Укажите логин для WebDAV и TorrServer (по умолчанию admin): " WEBDAV_USER
   WEBDAV_USER=${WEBDAV_USER:-admin}
 
@@ -191,12 +196,17 @@ EOF
   read -rp "Укажите внешний IP-адрес сервера (по умолчанию $AUTO_IP): " HOST_IP
   HOST_IP=${HOST_IP:-$AUTO_IP}
 
+  if ! echo "$HOST_IP" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$'; then
+    log_err "Некорректный IP-адрес: $HOST_IP. Ожидается формат X.X.X.X."
+    exit 1
+  fi
+
   AUTO_TORR_PORT=$(shuf -i 10000-60000 -n 1)
   read -rp "Укажите публичный порт для TorrServer (по умолчанию $AUTO_TORR_PORT): " TORR_PORT
   TORR_PORT=${TORR_PORT:-$AUTO_TORR_PORT}
 
   if ! [[ "$TORR_PORT" =~ ^[0-9]+$ ]] || [ "$TORR_PORT" -lt 1 ] || [ "$TORR_PORT" -gt 65535 ]; then
-    log_err "Некорректный порт: $TORR_PORT. Порт должен быть числом от 1 до 65535."
+    log_err "Некорректный порт: $TORR_PORT. Порт должен быть числом от 1 до 65535.\""
     exit 1
   fi
 
