@@ -216,6 +216,7 @@ def main() -> None:
                 f"{clean_title(filename)}.{t_hash[:8]}.strm",
             )
 
+            tmp_filepath = None
             try:
                 if os.path.exists(strm_filepath):
                     with open(strm_filepath, "r", encoding="utf-8") as f_obj:
@@ -234,7 +235,7 @@ def main() -> None:
 
             except Exception as exc:
                 try:
-                    if "tmp_filepath" in locals() and os.path.exists(tmp_filepath):
+                    if tmp_filepath and os.path.exists(tmp_filepath):
                         os.remove(tmp_filepath)
                 except Exception:
                     pass
