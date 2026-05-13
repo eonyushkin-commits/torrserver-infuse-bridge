@@ -31,6 +31,7 @@ How it works:
 - Public library via WebDAV with HTTP Basic Auth.
 - Configuration and data storage inside the project directory (`.env`, TorrServer database, `.strm` library).
 - Safe code updates without data loss in `./ts` and `./strm_library`.
+- Smart filename generation via [guessit](https://github.com/guessit-io/guessit): correctly handles season/episode, quality tags, and Cyrillic — Infuse immediately groups series by seasons.
 
 ## 📋 Requirements
 
@@ -99,6 +100,8 @@ During installation, the script interactively prompts for:
 - `TORR_PORT` — external TorrServer port (proxy container port). By default, the script suggests a random available port in the range `10000–60000`, but you can specify any other free port.
 
 These values are saved to `.env` file, which is used when launching services.
+
+> **Advanced:** the `TORR_HOST` variable sets the internal hostname of TorrServer within the Docker network (default: `torrserver`). No changes needed for standard `docker-compose` deployment. Useful when running `parser` locally outside compose or in a custom Docker network.
 
 ## 📁 Project Structure
 
@@ -185,6 +188,6 @@ Both services are protected by HTTP Basic Auth with login/password set during in
 
 - The project is oriented toward fully containerized launch without manual Python environment installation on the host.
 - The library for Infuse is published from the local `./strm_library` directory, TorrServer data from `./ts`.
-- Correct media library display in Infuse depends on how parser forms `.strm` files and element names; file names are formatted for Infuse convenience.
-- Parser uses error-resistant polling logic and atomic `.strm` writes via temporary files, so Infuse doesn’t encounter empty or partially written files.
+- For `.strm` filename generation, parser uses the [guessit](https://github.com/guessit-io/guessit) library, which reliably parses torrent names: correctly identifies season and episode, ignores quality tags (`1080p`, `WEB-DL`, etc.) and handles Cyrillic — allowing Infuse to immediately group series by seasons without manual corrections.
+- Parser uses error-resistant polling logic and atomic `.strm` writes via temporary files, so Infuse doesn't encounter empty or partially written files.
 - The project is especially convenient for VPS scenarios where TorrServer, `.strm` generator, Nginx proxy, and WebDAV work as a unified stack.
