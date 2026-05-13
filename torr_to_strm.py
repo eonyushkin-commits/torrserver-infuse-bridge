@@ -7,6 +7,7 @@ import time
 import urllib.parse
 
 import requests
+from guessit import guessit
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
@@ -15,8 +16,7 @@ from urllib3.util.retry import Retry
 #------------------------------------------------------------------------------
 TORR_PORT = os.getenv("TORR_PORT", "8090")
 TORR_INTERNAL_PORT = os.getenv("TORR_INTERNAL_PORT", "8090")
-TORR_HOST = os.getenv("TORR_HOST", "torrserver")
-TORRSERVER_INTERNAL = f"http://{TORR_HOST}:{TORR_INTERNAL_PORT}"
+TORRSERVER_INTERNAL = f"http://torrserver:{TORR_INTERNAL_PORT}"
 
 HOST_IP = os.getenv("HOST_IP", "127.0.0.1")
 
@@ -53,36 +53,28 @@ logger = logging.getLogger(__name__)
 
 
 def clean_title(filename: str) -> str:
-    """Нормализует имя медиафайла и возвращает стабильный заголовок."""
-    name = os.path.splitext(filename)[0]
-    name = name.replace(".", " ").replace("_", " ")
+    """Нормализует имя медиафайла и возвращает стабильный заголовок.
 
-    year_match = re.search(r"\b(19\d{2}|20\d{2})\b", name)
-    season_match = re.search(r"\bS\d{2}E\d{2}\b", name, re.IGNORECASE)
+    Использует guessit для надёжного парсинга торрент-имён: корректно
+    обрабатывает год, сезон/эпизод, теги качества, кириллицу и прочие
+    edge-кейсы, которые ломали предыдущую regex-эвристику.
+    """
+    if not filename:
+        return "unknown_title"
 
-    if season_match:
-        clean_name = name[:season_match.end()].strip()
-    elif year_match:
-        clean_name = name[:year_match.end()].strip()
-    else:
-        trash_words = [
-            r"1080p",
-            r"720p",
-            r"2160p",
-            r"4K",
-            r"WEB-DL",
-            r"BDRip",
-            r"HDR",
-            r"DUB",
-            r"HEVC",
-            r"H\.264",
-        ]
-        pattern = re.compile(r"\b(" + "|".join(trash_words) + r")\b", re.IGNORECASE)
-        match = pattern.search(name)
-        clean_name = name[:match.start()].strip() if match else name.strip()
+    try:
+        info = guessit(filename)
+        title: str = info.get("title", "").strip()
 
-    clean_name = re.sub(r"\s+", " ", clean_name).strip()
-    return clean_name or "unknown_title"
+        season = info.get("season")
+        episode = info.get("episode")
+        if season is not None and episode is not None:
+            title = f"{title} S{int(season):02d}E{int(episode):02d}"
+
+        return title or "unknown_title"
+    except Exception as exc:
+        logger.warning("guessit не смог разобрать имя файла '%s': %s", filename, exc)
+        return "unknown_title"
 
 
 def get_torrents():
