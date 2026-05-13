@@ -15,7 +15,8 @@ from urllib3.util.retry import Retry
 #------------------------------------------------------------------------------
 TORR_PORT = os.getenv("TORR_PORT", "8090")
 TORR_INTERNAL_PORT = os.getenv("TORR_INTERNAL_PORT", "8090")
-TORRSERVER_INTERNAL = f"http://torrserver:{TORR_INTERNAL_PORT}"
+TORR_HOST = os.getenv("TORR_HOST", "torrserver")
+TORRSERVER_INTERNAL = f"http://{TORR_HOST}:{TORR_INTERNAL_PORT}"
 
 HOST_IP = os.getenv("HOST_IP", "127.0.0.1")
 
