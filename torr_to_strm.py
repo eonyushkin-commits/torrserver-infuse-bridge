@@ -191,7 +191,7 @@ def main() -> None:
 
     # Создаём или обновляем .strm-файлы для найденных видеофайлов.
     for t_hash, files in ready_files.items():
-        for idx, file_info in enumerate(files):\
+        for idx, file_info in enumerate(files):
             file_path = file_info.get("path", "")
             if not file_path.lower().endswith(VIDEO_EXTENSIONS):
                 continue
