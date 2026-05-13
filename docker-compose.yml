@@ -55,6 +55,7 @@ services:
     environment:
       - HOST_IP=${HOST_IP}
       - TORR_PORT=${TORR_PORT}
+      - TORR_HOST=${TORR_HOST:-torrserver}
       - TORR_INTERNAL_PORT=8090
       - WEBDAV_USER=${WEBDAV_USER}
       - WEBDAV_PASSWORD=${WEBDAV_PASSWORD}
