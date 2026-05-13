@@ -23,15 +23,15 @@ How it works:
 
 ## ✨ Features
 
-- Fully containerized launch via Docker.
+- Fully containerized launch via Docker — no Python installation on the host is required.
 - Installation and updates through a single `install.sh` (no manual Git and Compose work).
-- Automatic `.strm` file generation for Infuse with atomic writes (no risk of empty files during Infuse reads).
+- Automatic `.strm` file generation for Infuse with atomic writes.
 - Background TorrServer polling without cron or Python dependencies on the host.
 - The `parser` service image is published to [GitHub Container Registry (GHCR)](https://ghcr.io/eonyushkin-commits/torrserver-infuse-bridge) and pulled automatically — no build step required on the server.
 - Public library via WebDAV with HTTP Basic Auth.
-- Configuration and data storage inside the project directory (`.env`, TorrServer database, `.strm` library).
+- Configuration and data storage inside the project directory.
 - Safe code updates without data loss in `./ts` and `./strm_library`.
-- Smart filename generation via [guessit](https://github.com/guessit-io/guessit): correctly handles season/episode, quality tags, and Cyrillic — Infuse immediately groups series by seasons.
+- Smart filename generation via [guessit](https://github.com/guessit-io/guessit) — Infuse immediately groups series by seasons without manual fixes.
 
 ## 📋 Requirements
 
@@ -186,8 +186,7 @@ Both services are protected by HTTP Basic Auth with login/password set during in
 
 ## 📝 Notes
 
-- The project is oriented toward fully containerized launch without manual Python environment installation on the host.
 - The library for Infuse is published from the local `./strm_library` directory, TorrServer data from `./ts`.
-- For `.strm` filename generation, parser uses the [guessit](https://github.com/guessit-io/guessit) library, which reliably parses torrent names: correctly identifies season and episode, ignores quality tags (`1080p`, `WEB-DL`, etc.) and handles Cyrillic — allowing Infuse to immediately group series by seasons without manual corrections.
-- Parser uses error-resistant polling logic and atomic `.strm` writes via temporary files, so Infuse doesn't encounter empty or partially written files.
+- For `.strm` filename generation, parser uses the [guessit](https://github.com/guessit-io/guessit) library: it correctly identifies season and episode, ignores quality tags (`1080p`, `WEB-DL`, etc.), and handles Cyrillic.
+- Atomic `.strm` writes are implemented via a temporary file + `os.replace()` — so Infuse never reads an empty or partially written file.
 - The project is especially convenient for VPS scenarios where TorrServer, `.strm` generator, Nginx proxy, and WebDAV work as a unified stack.
