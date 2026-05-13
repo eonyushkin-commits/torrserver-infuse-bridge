@@ -16,7 +16,8 @@ from urllib3.util.retry import Retry
 #------------------------------------------------------------------------------
 TORR_PORT = os.getenv("TORR_PORT", "8090")
 TORR_INTERNAL_PORT = os.getenv("TORR_INTERNAL_PORT", "8090")
-TORRSERVER_INTERNAL = f"http://torrserver:{TORR_INTERNAL_PORT}"
+TORR_HOST = os.getenv("TORR_HOST", "torrserver")
+TORRSERVER_INTERNAL = f"http://{TORR_HOST}:{TORR_INTERNAL_PORT}"
 
 HOST_IP = os.getenv("HOST_IP", "127.0.0.1")
 
@@ -190,7 +191,7 @@ def main() -> None:
 
     # Создаём или обновляем .strm-файлы для найденных видеофайлов.
     for t_hash, files in ready_files.items():
-        for idx, file_info in enumerate(files):
+        for idx, file_info in enumerate(files):\
             file_path = file_info.get("path", "")
             if not file_path.lower().endswith(VIDEO_EXTENSIONS):
                 continue
