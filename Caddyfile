@@ -1,0 +1,40 @@
+# Шлюз перед TorrServer и медиатекой. Все значения приходят из переменных окружения
+# контейнера (см. docker-compose.yml), файл не нужно редактировать вручную.
+#
+# TS_SITE / DAV_SITE:
+#   https://media.example.com:443   — домен, сертификат Let's Encrypt выпускается автоматически;
+#   http://:51234                   — без домена, обычный HTTP по IP.
+{
+	admin off
+}
+
+# Basic Auth для всего, кроме потоков. AUTH_HASH вычисляется при старте контейнера.
+(auth) {
+	basic_auth {
+		{$AUTH_USER} {$AUTH_HASH}
+	}
+}
+
+# TorrServer: веб-интерфейс под паролем и потоки для Infuse по секретному токену.
+{$TS_SITE} {
+	# Ссылки из .strm: /s/<STREAM_TOKEN>/stream/... Токен — единственный секрет в ссылке,
+	# основной пароль в медиатеку не попадает. Запрос с неверным токеном уйдёт в блок ниже
+	# и получит 401.
+	handle_path /s/{$STREAM_TOKEN}/* {
+		reverse_proxy {$TORRSERVER_ADDR}
+	}
+
+	handle {
+		import auth
+		reverse_proxy {$TORRSERVER_ADDR} {
+			# Пароль шлюза не нужен TorrServer и не должен уходить дальше.
+			header_up -Authorization
+		}
+	}
+}
+
+# Медиатека для Infuse (WebDAV, только чтение).
+{$DAV_SITE} {
+	import auth
+	reverse_proxy {$BRIDGE_ADDR}
+}
