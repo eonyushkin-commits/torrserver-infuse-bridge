@@ -3,8 +3,8 @@ import os
 import re
 import signal
 import threading
-import time
 import urllib.parse
+from concurrent.futures import ThreadPoolExecutor
 
 import requests
 from guessit import guessit
@@ -21,11 +21,16 @@ TORRSERVER_INTERNAL = f"http://{TORR_HOST}:{TORR_INTERNAL_PORT}"
 
 HOST_IP = os.getenv("HOST_IP", "127.0.0.1")
 
-AUTH_USER = urllib.parse.quote(os.getenv("WEBDAV_USER", "admin"))
-AUTH_PASS = urllib.parse.quote(os.getenv("WEBDAV_PASSWORD", ""))
+# safe="" — иначе "/" в логине или пароле остаётся как есть и ломает разбор URL.
+AUTH_USER = urllib.parse.quote(os.getenv("WEBDAV_USER", "admin"), safe="")
+AUTH_PASS = urllib.parse.quote(os.getenv("WEBDAV_PASSWORD", ""), safe="")
 AUTH_PREFIX = f"{AUTH_USER}:{AUTH_PASS}@" if AUTH_PASS else ""
 
 TORRSERVER_PUBLIC = f"http://{AUTH_PREFIX}{HOST_IP}:{TORR_PORT}"
+# Версия адреса для логов: пароль заменён на "***".
+TORRSERVER_PUBLIC_MASKED = (
+    f"http://{AUTH_USER}:***@{HOST_IP}:{TORR_PORT}" if AUTH_PASS else TORRSERVER_PUBLIC
+)
 OUTPUT_DIR = "/app/strm_library"
 
 VIDEO_EXTENSIONS = (".mkv", ".mp4", ".avi", ".ts", ".m2ts", ".m4v")
@@ -33,8 +38,15 @@ VIDEO_EXTENSIONS = (".mkv", ".mp4", ".avi", ".ts", ".m2ts", ".m4v")
 WAKEUP_DELAY = 10
 MAX_RETRIES = 3
 INTERVAL = 300
+FETCH_WORKERS = 8
+
+# Хэш в ссылке потока: v1 (SHA-1, 40 символов) или v2 (SHA-256, 64 символа).
+STRM_HASH_RE = re.compile(r"link=([0-9a-fA-F]{64}|[0-9a-fA-F]{40})(?![0-9a-fA-F])")
 
 logger = logging.getLogger(__name__)
+
+# Сигнал остановки: прерывает паузы и опрос торрентов, чтобы docker stop не доходил до SIGKILL.
+shutdown_event = threading.Event()
 
 
 def create_http_session() -> requests.Session:
@@ -55,22 +67,41 @@ def create_http_session() -> requests.Session:
     return session
 
 
+def _as_int_list(value) -> list:
+    """Приводит значение guessit (число или список чисел) к списку int."""
+    values = value if isinstance(value, list) else [value]
+    return [int(item) for item in values]
+
+
 def clean_title(filename: str) -> str:
     """Нормализует имя медиафайла через guessit и возвращает стабильный заголовок
-    для именования .strm-файла. Корректно обрабатывает год, сезон/эпизод,
-    теги качества, кириллицу и прочие edge-кейсы.
+    для именования .strm-файла. Корректно обрабатывает год, сезон/эпизод
+    (включая мультиэпизоды и эпизоды без сезона), части фильма, теги качества,
+    кириллицу и прочие edge-кейсы.
     """
     if not filename:
         return "unknown_title"
 
     try:
         info = guessit(filename)
-        title: str = info.get("title", "").strip()
+        title: str = str(info.get("title", "")).strip()
 
         season = info.get("season")
         episode = info.get("episode")
-        if season is not None and episode is not None:
-            title = f"{title} S{int(season):02d}E{int(episode):02d}"
+        part = info.get("part", info.get("cd"))
+
+        if episode is not None:
+            episodes = _as_int_list(episode)
+            episode_tag = f"E{episodes[0]:02d}"
+            if len(episodes) > 1:
+                episode_tag += f"-E{episodes[-1]:02d}"
+
+            if season is not None:
+                title = f"{title} S{_as_int_list(season)[0]:02d}{episode_tag}"
+            else:
+                title = f"{title} {episode_tag}"
+        elif part is not None:
+            title = f"{title} Part {_as_int_list(part)[0]}"
 
         return title or "unknown_title"
     except Exception as exc:
@@ -93,47 +124,64 @@ def get_torrents(session: requests.Session, internal_url: str):
         return None
 
 
+def _fetch_file_stats(session: requests.Session, internal_url: str, t_hash: str):
+    """Запрашивает список файлов торрента. Возвращает непустой список или None,
+    если метаданные ещё не готовы или запрос не удался.
+    """
+    if shutdown_event.is_set():
+        return None
+
+    try:
+        t_resp = session.post(
+            f"{internal_url}/torrents",
+            json={"action": "get", "hash": t_hash},
+            timeout=10,
+        )
+        t_resp.raise_for_status()
+
+        files = t_resp.json().get("file_stats", [])
+        if files:
+            logger.info("%s...: получено %d файлов", t_hash[:8], len(files))
+            return files
+
+        logger.info("%s...: file_stats пуст, торрент ещё загружается", t_hash[:8])
+    except Exception as exc:
+        logger.error("%s...: ошибка запроса — %s", t_hash[:8], exc)
+
+    return None
+
+
 def _fetch_ready_files(
     session: requests.Session,
     internal_url: str,
     active_hashes: set,
 ) -> dict:
     """Ожидает метаданные файлов по активным торрентам с ретраями.
+    Запросы к торрентам выполняются параллельно.
     Возвращает словарь {hash: [file_stats]} для торрентов, по которым метаданные стали доступны.
     """
     pending_hashes = list(active_hashes)
     ready_files = {}
 
     for attempt in range(MAX_RETRIES):
-        still_pending = []
-
-        for t_hash in pending_hashes:
-            try:
-                t_resp = session.post(
-                    f"{internal_url}/torrents",
-                    json={"action": "get", "hash": t_hash},
-                    timeout=10,
+        with ThreadPoolExecutor(max_workers=FETCH_WORKERS) as pool:
+            results = list(
+                pool.map(
+                    lambda t_hash: _fetch_file_stats(session, internal_url, t_hash),
+                    pending_hashes,
                 )
-                t_resp.raise_for_status()
+            )
 
-                files = t_resp.json().get("file_stats", [])
-
-                if files:
-                    ready_files[t_hash] = files
-                    logger.info("%s...: получено %d файлов", t_hash[:8], len(files))
-                else:
-                    logger.info(
-                        "%s...: file_stats пуст, торрент ещё загружается",
-                        t_hash[:8],
-                    )
-                    still_pending.append(t_hash)
-            except Exception as exc:
-                logger.error("%s...: ошибка запроса — %s", t_hash[:8], exc)
+        still_pending = []
+        for t_hash, files in zip(pending_hashes, results):
+            if files:
+                ready_files[t_hash] = files
+            else:
                 still_pending.append(t_hash)
 
         pending_hashes = still_pending
 
-        if not pending_hashes:
+        if not pending_hashes or shutdown_event.is_set():
             break
 
         if attempt < MAX_RETRIES - 1:
@@ -144,9 +192,10 @@ def _fetch_ready_files(
                 attempt + 1,
                 MAX_RETRIES,
             )
-            time.sleep(WAKEUP_DELAY)
+            if shutdown_event.wait(WAKEUP_DELAY):
+                break
 
-    if pending_hashes:
+    if pending_hashes and not shutdown_event.is_set():
         logger.warning(
             "Пропущено %d торрентов после %d попыток: метаданные недоступны. Хэши: %s",
             len(pending_hashes),
@@ -161,29 +210,43 @@ def _sync_strm_files(
     ready_files: dict,
     public_url: str,
     output_dir: str,
-) -> None:
+) -> set:
     """Создаёт или атомарно обновляет .strm-файлы для найденных видеофайлов.
     Неизменённые файлы (с актуальным URL) не перезаписываются.
+    Возвращает множество путей .strm, которые должны существовать для этих торрентов.
     """
+    expected_paths = set()
+
     for t_hash, files in ready_files.items():
+        entries = []
         for idx, file_info in enumerate(files):
             file_path = file_info.get("path", "")
             if not file_path.lower().endswith(VIDEO_EXTENSIONS):
                 continue
 
             filename = os.path.basename(file_path)
-            encoded_filename = urllib.parse.quote(filename)
-
             file_id = file_info.get("id", idx + 1)
+            entries.append((filename, file_id, clean_title(filename)))
+
+        # Файлы одного торрента с одинаковым заголовком получают id файла в имени,
+        # иначе они перезаписывали бы друг друга.
+        title_counts = {}
+        for _, _, title in entries:
+            title_counts[title] = title_counts.get(title, 0) + 1
+
+        for filename, file_id, title in entries:
+            encoded_filename = urllib.parse.quote(filename)
             stream_url = (
                 f"{public_url}/stream/{encoded_filename}"
                 f"?link={t_hash}&index={file_id}&play"
             )
 
-            strm_filepath = os.path.join(
-                output_dir,
-                f"{clean_title(filename)}.{t_hash[:8]}.strm",
-            )
+            suffix = t_hash[:8]
+            if title_counts[title] > 1:
+                suffix = f"{suffix}-{file_id}"
+
+            strm_filepath = os.path.join(output_dir, f"{title}.{suffix}.strm")
+            expected_paths.add(strm_filepath)
 
             tmp_filepath = None
             try:
@@ -210,12 +273,23 @@ def _sync_strm_files(
                     pass
                 logger.error("Ошибка записи файла %s: %s", strm_filepath, exc)
 
+    return expected_paths
+
 
 def _cleanup_stale_strm(
     active_hashes_set: set,
+    synced_hashes: set,
+    expected_paths: set,
     output_dir: str,
 ) -> None:
-    """Удаляет устаревшие .strm-файлы, которых больше нет в списке активных торрентов TorrServer."""
+    """Удаляет устаревшие .strm-файлы: для торрентов, которых больше нет в TorrServer,
+    и для активных торрентов, если файл не входит в актуальный набор
+    (сменилась схема именования или файл исчез из раздачи).
+    Файлы торрентов, чьи метаданные в этот проход не получены, не трогаются.
+    """
+    active_lower = {h.lower() for h in active_hashes_set}
+    synced_lower = {h.lower() for h in synced_hashes}
+
     for file in os.listdir(output_dir):
         if not file.endswith(".strm"):
             continue
@@ -225,10 +299,17 @@ def _cleanup_stale_strm(
             with open(filepath, "r", encoding="utf-8") as f_obj:
                 content = f_obj.read()
 
-            match = re.search(r"link=([a-fA-F0-9]{40})", content)
-            if match and match.group(1) not in active_hashes_set:
+            match = STRM_HASH_RE.search(content)
+            if not match:
+                continue
+
+            t_hash = match.group(1).lower()
+            if t_hash not in active_lower:
                 os.remove(filepath)
                 logger.info("Удалён устаревший файл: %s", file)
+            elif t_hash in synced_lower and filepath not in expected_paths:
+                os.remove(filepath)
+                logger.info("Удалён неактуальный файл активного торрента: %s", file)
         except Exception as exc:
             logger.error("Ошибка при чтении/удалении файла %s: %s", filepath, exc)
 
@@ -269,12 +350,16 @@ def main(session: requests.Session) -> None:
                 t_title,
             )
 
-    if not active_hashes_set:
+    # Пустой список — не повод выходить: .strm удалённых торрентов тоже нужно убрать.
+    ready_files = {}
+    if active_hashes_set:
+        ready_files = _fetch_ready_files(session, TORRSERVER_INTERNAL, active_hashes_set)
+
+    if shutdown_event.is_set():
         return
 
-    ready_files = _fetch_ready_files(session, TORRSERVER_INTERNAL, active_hashes_set)
-    _sync_strm_files(ready_files, TORRSERVER_PUBLIC, OUTPUT_DIR)
-    _cleanup_stale_strm(active_hashes_set, OUTPUT_DIR)
+    expected_paths = _sync_strm_files(ready_files, TORRSERVER_PUBLIC, OUTPUT_DIR)
+    _cleanup_stale_strm(active_hashes_set, set(ready_files), expected_paths, OUTPUT_DIR)
 
 
 def configure_logging(level: int = logging.INFO) -> None:
@@ -297,11 +382,9 @@ if __name__ == "__main__":
     logger.info(
         "Парсер запущен. Internal: %s | Public: %s | Интервал: %d мин.",
         TORRSERVER_INTERNAL,
-        TORRSERVER_PUBLIC,
+        TORRSERVER_PUBLIC_MASKED,
         INTERVAL // 60,
     )
-
-    shutdown_event = threading.Event()
 
     def handle_sigterm(signum, frame) -> None:
         """Обрабатывает сигналы завершения и останавливает цикл опроса."""
