@@ -23,7 +23,9 @@ readonly NC='\033[0m'
 readonly REPO="eonyushkin-commits/torrserver-infuse-bridge"
 readonly RAW_BASE="https://raw.githubusercontent.com/${REPO}"
 readonly PROJECT_FILES=(docker-compose.yml docker-compose.tls.yml Caddyfile)
-readonly GATEWAY_CONTAINER="infuse-gateway"
+# Контейнеры проекта: текущей версии и версии 1. Занятые ими порты — «свои».
+readonly OWN_CONTAINERS=(infuse-gateway infuse-bridge torrserver torr-proxy webdav-infuse strm-parser)
+readonly LEGACY_CONTAINERS=(torr-proxy webdav-infuse strm-parser torrserver)
 
 INSTALL_DIR="/opt/torrserver-infuse-bridge"
 VERSION="main"
@@ -190,8 +192,12 @@ is_domain() {
   [[ "$1" =~ ^([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,63}$ ]]
 }
 
-gateway_running() {
-  [ -n "$(docker ps -q --filter "name=^${GATEWAY_CONTAINER}$" 2>/dev/null)" ]
+port_owned_by_us() {
+  local name
+  for name in "${OWN_CONTAINERS[@]}"; do
+    docker port "$name" 2>/dev/null | grep -qE ":$1\$" && return 0
+  done
+  return 1
 }
 
 port_busy() {
@@ -358,17 +364,16 @@ configure_ports() {
     die "Порт 80 занят выпуском сертификата — выберите другой."
   fi
 
-  # Порты нашего же работающего шлюза заняты им самим — проверяем только чужие.
-  if ! gateway_running; then
-    local port
-    local ports=("$TS_PORT" "$WEBDAV_PORT")
-    [ -n "$DOMAIN" ] && ports+=(80)
-    for port in "${ports[@]}"; do
-      if port_busy "$port"; then
-        die "Порт $port уже занят другим процессом. Освободите его или выберите другой."
-      fi
-    done
-  fi
+  # Порты, занятые контейнерами этого же проекта (в том числе версии 1), освободятся
+  # при перезапуске — проверяем только чужие.
+  local port
+  local ports=("$TS_PORT" "$WEBDAV_PORT")
+  [ -n "$DOMAIN" ] && ports+=(80)
+  for port in "${ports[@]}"; do
+    if port_busy "$port" && ! port_owned_by_us "$port"; then
+      die "Порт $port уже занят другим процессом. Освободите его или выберите другой."
+    fi
+  done
 }
 
 configure_credentials() {
@@ -479,6 +484,12 @@ configure() {
 
 cleanup_legacy() {
   [ "$LEGACY" -eq 1 ] || return 0
+
+  # Контейнеры версии 1 могли быть созданы Compose v1 под другим именем проекта —
+  # тогда --remove-orphans их не увидит, а имя torrserver вызовет конфликт.
+  # Данные TorrServer лежат в ./ts и не затрагиваются.
+  log_info "Остановка контейнеров предыдущей версии..."
+  docker rm -f "${LEGACY_CONTAINERS[@]}" >/dev/null 2>&1 || true
 
   # Сгенерированные файлы версии 1 больше не используются.
   rm -f nginx.conf .htpasswd
