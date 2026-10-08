@@ -1,31 +1,5 @@
-# Данные времени выполнения (не нужны в образе)
-ts/
-strm_library/
-.env
-.htpasswd
-nginx.conf
-
-# Git и CI
-.git/
-.github/
-
-# Конфигурация Docker (не нужна внутри образа)
-docker-compose.yml
-.dockerignore
-
-# Скрипт установки (запускается на хосте, не в контейнере)
-install.sh
-
-# Документация
-README.md
-README.en.md
-
-# Временные и мусорные файлы
-__pycache__/
-*.pyc
-*.pyo
-*.strm.tmp
-*.log
-.DS_Store
-.idea/
-.vscode/
+# В образ попадают только requirements.txt и пакет bridge/.
+*
+!requirements.txt
+!bridge/
+bridge/**/__pycache__

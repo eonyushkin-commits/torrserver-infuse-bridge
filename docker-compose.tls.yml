@@ -1,0 +1,6 @@
+# Подключается install.sh (через COMPOSE_FILE в .env), когда указан домен:
+# порт 80 нужен для выпуска сертификата Let's Encrypt и редиректа HTTP → HTTPS.
+services:
+  gateway:
+    ports:
+      - "80:80"

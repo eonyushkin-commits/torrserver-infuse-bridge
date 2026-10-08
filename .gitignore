@@ -1,10 +1,15 @@
+# Данные и конфигурация конкретной установки
 .env
 ts/
+caddy/
+
+# Остатки установок версии 1 (до перехода на виртуальную медиатеку)
 strm_library/
-__pycache__/
-*.pyc
 .htpasswd
 nginx.conf
+
+__pycache__/
+*.pyc
 
 # Редакторы и IDE
 .idea/
@@ -13,8 +18,4 @@ nginx.conf
 *.swo
 .DS_Store
 
-# Временные файлы парсера
-*.strm.tmp
-
-# Логи
 *.log

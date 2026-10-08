@@ -1,17 +1,7 @@
-services:
-  webdav:
-    image: ionelmc/webdav
-    container_name: webdav-infuse
-    restart: unless-stopped
-    ports:
-      - "${WEBDAV_PORT}:8080"
-    volumes:
-      - ./strm_library:/media
-    environment:
-      - WEBDAV_USERNAME=${WEBDAV_USER}
-      - WEBDAV_PASSWORD=${WEBDAV_PASSWORD}
-      - UID=0
+# Все параметры задаются в .env (его создаёт install.sh, пример — .env.example).
+name: torrserver-infuse-bridge
 
+services:
   torrserver:
     image: ghcr.io/yourok/torrserver:MatriX.141
     container_name: torrserver
@@ -25,38 +15,60 @@ services:
       retries: 5
       start_period: 10s
 
-  torr-proxy:
-    image: nginx:1.27-alpine
-    container_name: torr-proxy
+  # Виртуальная медиатека: WebDAV-дерево .strm-ссылок, построенное из TorrServer.
+  bridge:
+    image: ghcr.io/eonyushkin-commits/torrserver-infuse-bridge:${BRIDGE_VERSION:-latest}
+    container_name: infuse-bridge
     restart: unless-stopped
-    ports:
-      - "${TORR_PORT}:80"
-    volumes:
-      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
-      - ./.htpasswd:/etc/nginx/.htpasswd:ro
     depends_on:
       torrserver:
         condition: service_healthy
-
-  parser:
-    image: ghcr.io/eonyushkin-commits/torrserver-infuse-bridge:latest
-    container_name: strm-parser
-    restart: unless-stopped
-    stop_grace_period: 30s
-    depends_on:
-      torrserver:
-        condition: service_healthy
+    environment:
+      PUBLIC_URL: ${PUBLIC_URL:?PUBLIC_URL не задан в .env}
+      STREAM_TOKEN: ${STREAM_TOKEN:?STREAM_TOKEN не задан в .env}
+      TORRSERVER_ADDR: torrserver:8090
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/healthz', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
     logging:
-      driver: "json-file"
+      driver: json-file
       options:
         max-size: "10m"
         max-file: "3"
-    volumes:
-      - ./strm_library:/app/strm_library
+
+  # Шлюз: Basic Auth, потоки по токену, HTTPS при наличии домена.
+  gateway:
+    image: caddy:2.8.4-alpine
+    container_name: infuse-gateway
+    restart: unless-stopped
+    depends_on:
+      torrserver:
+        condition: service_healthy
+      bridge:
+        condition: service_started
+    ports:
+      - "${TS_PORT:?TS_PORT не задан в .env}:${TS_PORT}"
+      - "${WEBDAV_PORT:?WEBDAV_PORT не задан в .env}:${WEBDAV_PORT}"
     environment:
-      - HOST_IP=${HOST_IP}
-      - TORR_PORT=${TORR_PORT}
-      - TORR_HOST=${TORR_HOST:-torrserver}
-      - TORR_INTERNAL_PORT=8090
-      - WEBDAV_USER=${WEBDAV_USER}
-      - WEBDAV_PASSWORD=${WEBDAV_PASSWORD}
+      TS_SITE: ${TS_SITE:?TS_SITE не задан в .env}
+      DAV_SITE: ${DAV_SITE:?DAV_SITE не задан в .env}
+      AUTH_USER: ${AUTH_USER:?AUTH_USER не задан в .env}
+      AUTH_PASSWORD: ${AUTH_PASSWORD:?AUTH_PASSWORD не задан в .env}
+      STREAM_TOKEN: ${STREAM_TOKEN}
+      TORRSERVER_ADDR: torrserver:8090
+      BRIDGE_ADDR: bridge:8080
+    # Хэш пароля для basic_auth вычисляется при каждом старте, открытый пароль
+    # убирается из окружения процесса Caddy.
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - >-
+        AUTH_HASH="$$(caddy hash-password --plaintext "$$AUTH_PASSWORD")" &&
+        export AUTH_HASH && unset AUTH_PASSWORD &&
+        exec caddy run --config /etc/caddy/Caddyfile --adapter caddyfile
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./caddy/data:/data
+      - ./caddy/config:/config

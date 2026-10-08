@@ -1,0 +1,67 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [ "main" ]
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  python:
+    name: Тесты и линтер
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Установка зависимостей
+        run: pip install -r requirements.txt ruff==0.6.9
+
+      - name: Ruff
+        run: ruff check .
+
+      - name: Юнит-тесты
+        run: python -m unittest discover -s tests -t . -v
+
+  config:
+    name: Проверка install.sh, compose и Caddyfile
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: ShellCheck
+        run: shellcheck install.sh
+
+      - name: docker compose config (IP и домен)
+        run: |
+          docker compose --env-file .env.example -f docker-compose.yml config -q
+          docker compose --env-file .env.example -f docker-compose.yml -f docker-compose.tls.yml config -q
+
+      - name: caddy validate (IP и домен)
+        run: |
+          for sites in "http://:51234 http://:8080" "https://media.example.com:443 https://media.example.com:8443"; do
+            set -- $sites
+            docker run --rm -v "$PWD/Caddyfile:/etc/caddy/Caddyfile:ro" \
+              -e TS_SITE="$1" -e DAV_SITE="$2" -e AUTH_USER=admin \
+              -e STREAM_TOKEN=0123456789abcdef0123 -e TORRSERVER_ADDR=torrserver:8090 \
+              -e BRIDGE_ADDR=bridge:8080 \
+              caddy:2.8.4-alpine sh -c \
+              'AUTH_HASH="$(caddy hash-password --plaintext test)" caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile'
+          done
+
+  image:
+    name: Сборка образа
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: false
