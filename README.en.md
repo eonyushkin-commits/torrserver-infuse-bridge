@@ -2,11 +2,11 @@
 
 # 🎬 TorrServer to Infuse Bridge
 
-Stream torrents in **Infuse** (Apple TV, iOS, macOS) without downloading them to disk. The project connects **TorrServer** and Infuse via auto-generated `.strm` files and WebDAV: add a torrent to TorrServer, and a minute later the movie shows up in your Infuse library with a poster and description.
+Stream torrents in **Infuse** (Apple TV, iOS, macOS) without downloading them to disk. The project connects **TorrServer** and Infuse via auto-generated `.strm` files and WebDAV: add a torrent to TorrServer, and within a few minutes (the parser polls TorrServer every 5 minutes) the movie shows up in your Infuse library with a poster and description.
 
 ## ✨ Features
 
-- Fully containerized: the host only needs Docker, git, and curl.
+- Fully containerized: the host only needs Docker with Compose and a few standard tools (see Requirements).
 - One-script install and update via `install.sh` — no manual Git or Compose work.
 - Prebuilt `parser` image from [GHCR](https://ghcr.io/eonyushkin-commits/torrserver-infuse-bridge) — no building on the server.
 - Smart file naming via [guessit](https://github.com/guessit-io/guessit): Infuse groups TV shows by season out of the box, quality tags (`1080p`, `WEB-DL`) are ignored, Cyrillic titles are supported.
@@ -34,7 +34,7 @@ Data flow:
 
 ## 📋 Requirements
 
-- A server (VPS or home) with `git`, `docker`, `curl`, and Docker Compose v2 (or a compatible `docker-compose`).
+- A server (VPS or home) with `git`, `docker`, `curl`, Docker Compose v2 (or a compatible `docker-compose`), plus `ss` (`iproute2` package) and `shuf` (`coreutils`) — `install.sh` uses them.
 - The install script must run as `root` or via `sudo`.
 
 ## 🚀 Quick start
@@ -52,24 +52,24 @@ The script clones the repository into `/opt/torrserver-infuse-bridge`, interacti
 | Parameter | Default | Description |
 |---|---|---|
 | `WEBDAV_PORT` | `8080` | External WebDAV port |
-| `WEBDAV_USER` | `admin` | Login for WebDAV and the TorrServer proxy |
-| `WEBDAV_PASSWORD` | — | Password (shared by WebDAV and the proxy) |
-| `HOST_IP` | — | External IP or domain of the server |
+| `WEBDAV_USER` | `admin` | Login for WebDAV and the TorrServer proxy (no spaces, `:` or `'`) |
+| `WEBDAV_PASSWORD` | — | Password (shared by WebDAV and the proxy); any characters except `'` |
+| `HOST_IP` | — | External IPv4 address of the server (domains are not supported) |
 | `TORR_PORT` | random from `10000–60000` | External TorrServer port (proxy port) |
 
 > ⚠️ **`HOST_IP` is the most important parameter.** This address is written inside the generated `.strm` files. If it's wrong (e.g. you leave `127.0.0.1` on a remote VPS), Infuse will load the library fine but playback will fail.
 
-Values are stored in `.env`. There is also a `TORR_HOST` variable (default `torrserver`) — the internal TorrServer hostname on the Docker network; you only need to change it when running the `parser` outside compose or in a non-standard network.
+Values are stored in `.env` (login and password in single quotes). There is also a `TORR_HOST` variable (default `torrserver`) — the internal TorrServer hostname on the Docker network. The installer doesn't ask for it: if you need it, add a `TORR_HOST=...` line to `.env` manually and re-run `install.sh` — both the parser and the Nginx proxy use it, and the line is kept when `.env` is recreated.
 
 ## 🍏 Connecting Infuse
 
 1. Infuse → **Settings** → **Add Files** → **Other...**
 2. Protocol: **WebDAV**.
-3. **Address** — your server's IP or domain (without `http://`), **Username** and **Password** — the values from the install.
+3. **Address** — your server's IP address (without `http://`), **Username** and **Password** — the values from the install.
 4. Under **Advanced**, set the **Port** to your `WEBDAV_PORT` (default `8080`).
 5. Tap **Save** and add the folder to Favorites (⭐).
 
-Infuse will scan the library, fetch posters, and group TV shows by season. New torrents appear with a short delay — after the parser's next pass.
+Infuse will scan the library, fetch posters, and group TV shows by season. New torrents appear within up to 5 minutes — after the parser's next pass (plus the time it takes to load the torrent's metadata).
 
 ## 🔄 Updating
 
@@ -80,9 +80,14 @@ cd /opt/torrserver-infuse-bridge
 sudo ./install.sh
 ```
 
-The script stops the containers, updates the code (`git fetch --all && git reset --hard origin/<current branch>`), recreates `.env` and configs if needed, pulls the latest `parser` image, and brings the stack back up. The `./ts` and `./strm_library` directories are left untouched.
+The script asks for confirmation (`Продолжить? [y/N]` — "Continue?"):
 
-To update only the `parser` image without reinstalling:
+- **`y`** — stops the containers and updates the code (`git fetch --all && git reset --hard origin/<current branch>`). ⚠️ Any local changes to repository files in `/opt/torrserver-infuse-bridge` are overwritten (`.env`, `.htpasswd`, `nginx.conf` and your data are kept).
+- **`N`** or Enter (the default) — the code is **not** updated, but the script keeps going: it offers to recreate `.env`, regenerates the configs, and restarts the containers.
+
+Then the script pulls fresh images (`docker compose pull`) and brings the stack back up. The `./ts` and `./strm_library` directories are left untouched.
+
+To update only the `parser` image without reinstalling (with Compose v1, use `docker-compose`):
 
 ```bash
 cd /opt/torrserver-infuse-bridge
@@ -94,7 +99,7 @@ docker compose up -d parser
 
 ## 🛠 Administration
 
-Run all commands from `/opt/torrserver-infuse-bridge`:
+Run all commands from `/opt/torrserver-infuse-bridge` (with Compose v1, use `docker-compose` instead of `docker compose`):
 
 ```bash
 docker compose ps              # container status
@@ -114,7 +119,7 @@ Main URLs after installation (both behind Basic Auth):
 /opt/torrserver-infuse-bridge
 ├── install.sh          # install, update, reconfigure (idempotent)
 ├── .env                # environment parameters (mode 600, not in Git)
-├── .htpasswd           # bcrypt password hash for Basic Auth (not in Git)
+├── .htpasswd           # password hash for Basic Auth (not in Git)
 ├── nginx.conf          # proxy config in front of TorrServer (generated)
 ├── docker-compose.yml  # container definitions
 ├── strm_library/       # .strm library served to Infuse
@@ -129,17 +134,16 @@ The `torr_to_strm.py` script lives in the repository but runs only inside the `p
 - TorrServer is not exposed directly: external access goes only through the Nginx proxy with Basic Auth.
 - `.strm` files contain URLs with credentials (`http://user:password@host:port/...`), but are themselves only reachable via WebDAV protected by the same credentials.
 
-**Be aware:** the stack runs over plain HTTP — both Basic Auth and the credentials embedded in stream URLs travel over the network unencrypted. For access over the internet, it is recommended to:
+**Be aware:** the stack runs over plain HTTP — both Basic Auth and the credentials embedded in stream URLs travel over the network unencrypted. The parser always writes `http://user:password@HOST_IP:TORR_PORT/...` into the `.strm` files, so a TLS reverse proxy (Caddy, Traefik, etc.) can protect connections to WebDAV and the TorrServer UI, but **not** the streams themselves or the credentials inside them. For access over the internet, it is recommended to:
 
-- put a TLS-terminating reverse proxy in front of the services (Caddy, Traefik, Nginx + Let's Encrypt), or
 - restrict access to the ports with a firewall by source IP (ufw, Security Groups), or
-- connect via a VPN such as WireGuard.
+- connect via a VPN such as WireGuard — the only option that also encrypts the streams.
 
 And in any case — use a strong password.
 
 ## 🩺 Troubleshooting
 
-**The library shows up in Infuse, but playback fails.** Almost always a wrong `HOST_IP` in `.env` (the address inside the `.strm` files). Fix the value and re-run `install.sh` — the files will be regenerated.
+**The library shows up in Infuse, but playback fails.** Almost always a wrong `HOST_IP` in `.env` (the address inside the `.strm` files). Fix the value and re-run `install.sh`. The files are not regenerated instantly but on the parser's next pass: the first pass runs right after the container starts, but each torrent's metadata has to load first (up to 3 attempts, 10 seconds apart). A torrent that isn't ready yet gets its `.strm` updated on a later pass (every 5 minutes). Watch progress with `docker logs -f strm-parser`.
 
 **A new torrent doesn't appear in Infuse.** Check the parser logs: `docker logs -f strm-parser`. Make sure the `torrserver` container is healthy (`docker compose ps`).
 

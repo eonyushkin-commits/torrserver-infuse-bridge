@@ -64,7 +64,7 @@ check_requirements() {
     exit 1
   fi
 
-  local deps=("git" "docker" "curl")
+  local deps=("git" "docker" "curl" "ss" "shuf")
   local dep
 
   for dep in "${deps[@]}"; do
@@ -77,6 +77,17 @@ check_requirements() {
   if ! docker compose version >/dev/null 2>&1 && ! command -v docker-compose >/dev/null 2>&1; then
     log_err "Docker Compose не найден (ни v1, ни v2)."
     exit 1
+  fi
+}
+
+#------------------------------------------------------------------------------
+# Docker Compose: единый вызов для v2 (docker compose) и v1 (docker-compose).
+#------------------------------------------------------------------------------
+compose() {
+  if docker compose version >/dev/null 2>&1; then
+    docker compose "$@"
+  else
+    docker-compose "$@"
   fi
 }
 
@@ -95,7 +106,7 @@ fetch_repository() {
 
     read -rp "Продолжить? [y/N]: " confirm
     [[ "$confirm" =~ ^[yY]([eE][sS])?$ ]] || {
-      log_info "Обновление отменено."
+      log_info "Обновление кода пропущено. Продолжаю настройку и перезапуск сервисов."
       return 0
     }
 
@@ -104,7 +115,7 @@ fetch_repository() {
     (
       cd "$INSTALL_DIR"
 
-      docker compose down 2>/dev/null || docker-compose down 2>/dev/null || true
+      compose down 2>/dev/null || true
 
       LOCAL_BRANCH=$(git rev-parse --abbrev-ref HEAD)
       git fetch --all
@@ -119,6 +130,22 @@ fetch_repository() {
 #------------------------------------------------------------------------------
 # Конфигурация: сбор параметров и генерация локальных конфигурационных файлов.
 #------------------------------------------------------------------------------
+write_nginx_conf() {
+  # TORR_HOST — имя TorrServer в Docker-сети; должно совпадать с тем, что использует парсер.
+  cat > "$INSTALL_DIR/nginx.conf" <<EOF
+server {
+    listen 80;
+
+    location / {
+        auth_basic "Restricted Area";
+        auth_basic_user_file /etc/nginx/.htpasswd;
+        proxy_pass http://${TORR_HOST:-torrserver}:8090;
+        proxy_set_header Host \$host;
+    }
+}
+EOF
+}
+
 configure_env() {
   local env_file="$INSTALL_DIR/.env"
 
@@ -143,18 +170,7 @@ configure_env() {
       docker run --rm httpd:alpine htpasswd -bn "$WEBDAV_USER" "$WEBDAV_PASSWORD" > "$INSTALL_DIR/.htpasswd"
       chmod 644 "$INSTALL_DIR/.htpasswd"
 
-      cat > "$INSTALL_DIR/nginx.conf" <<'EOF'
-server {
-    listen 80;
-
-    location / {
-        auth_basic "Restricted Area";
-        auth_basic_user_file /etc/nginx/.htpasswd;
-        proxy_pass http://torrserver:8090;
-        proxy_set_header Host $host;
-    }
-}
-EOF
+      write_nginx_conf
       return 0
     fi
   fi
@@ -177,11 +193,23 @@ EOF
   read -rp "Укажите логин для WebDAV и TorrServer (по умолчанию admin): " WEBDAV_USER
   WEBDAV_USER=${WEBDAV_USER:-admin}
 
+  # Значения пишутся в .env в одинарных кавычках, поэтому сама кавычка недопустима;
+  # двоеточие в логине ломает формат htpasswd и user:password в URL.
+  if [[ "$WEBDAV_USER" == *[\':[:space:]]* ]]; then
+    log_err "Логин не должен содержать пробелы, двоеточие и одинарную кавычку (')."
+    exit 1
+  fi
+
   read -rsp "Укажите пароль для WebDAV и TorrServer: " WEBDAV_PASSWORD
   echo
 
   if [ -z "$WEBDAV_PASSWORD" ]; then
     log_err "Пароль не может быть пустым."
+    exit 1
+  fi
+
+  if [[ "$WEBDAV_PASSWORD" == *\'* ]]; then
+    log_err "Пароль не должен содержать одинарную кавычку (')."
     exit 1
   fi
 
@@ -215,33 +243,36 @@ EOF
     exit 1
   fi
 
+  # TORR_HOST не спрашивается при установке, но заданное вручную значение сохраняется.
+  local saved_torr_host=""
+  if [ -f "$env_file" ]; then
+    saved_torr_host=$(grep -E '^TORR_HOST=' "$env_file" | tail -n 1 || true)
+  fi
+
   touch "$env_file"
   chmod 600 "$env_file"
 
+  # Одинарные кавычки: значения не раскрываются ни bash (source), ни docker compose,
+  # поэтому $, #, пробелы и прочие спецсимволы в пароле безопасны.
   cat > "$env_file" <<EOF
 WEBDAV_PORT=$WEBDAV_PORT
-WEBDAV_USER=$WEBDAV_USER
-WEBDAV_PASSWORD=$WEBDAV_PASSWORD
+WEBDAV_USER='$WEBDAV_USER'
+WEBDAV_PASSWORD='$WEBDAV_PASSWORD'
 HOST_IP=$HOST_IP
 TORR_PORT=$TORR_PORT
 EOF
+
+  if [ -n "$saved_torr_host" ]; then
+    echo "$saved_torr_host" >> "$env_file"
+    TORR_HOST=${saved_torr_host#TORR_HOST=}
+    TORR_HOST=${TORR_HOST//[\"\']/}
+  fi
 
   log_info "Генерация ключей доступа для TorrServer proxy..."
   docker run --rm httpd:alpine htpasswd -bn "$WEBDAV_USER" "$WEBDAV_PASSWORD" > "$INSTALL_DIR/.htpasswd"
   chmod 644 "$INSTALL_DIR/.htpasswd"
 
-  cat > "$INSTALL_DIR/nginx.conf" <<'EOF'
-server {
-    listen 80;
-
-    location / {
-        auth_basic "Restricted Area";
-        auth_basic_user_file /etc/nginx/.htpasswd;
-        proxy_pass http://torrserver:8090;
-        proxy_set_header Host $host;
-    }
-}
-EOF
+  write_nginx_conf
 }
 
 #------------------------------------------------------------------------------
@@ -252,11 +283,9 @@ start_services() {
 
   cd "$INSTALL_DIR"
 
-  if docker compose version >/dev/null 2>&1; then
-    docker compose up -d
-  else
-    docker-compose up -d
-  fi
+  # Без pull образ parser:latest из локального кэша не обновится.
+  compose pull || log_warn "Не удалось скачать свежие образы, используются локальные."
+  compose up -d
 
   echo
   log_success "Установка успешно завершена!"
@@ -292,4 +321,6 @@ main() {
   self_remove
 }
 
-main
+# Вызов и exit в одной группе: bash разбирает её целиком до выполнения, поэтому
+# перезапись install.sh во время git reset не приведёт к чтению чужих байтов.
+{ main "$@"; exit; }

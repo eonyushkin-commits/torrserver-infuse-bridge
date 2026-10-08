@@ -42,6 +42,7 @@ services:
     image: ghcr.io/eonyushkin-commits/torrserver-infuse-bridge:latest
     container_name: strm-parser
     restart: unless-stopped
+    stop_grace_period: 30s
     depends_on:
       torrserver:
         condition: service_healthy
